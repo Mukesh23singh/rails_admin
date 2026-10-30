@@ -1,15 +1,20 @@
+# frozen_string_literal: true
+
 require 'rails_admin/engine'
 require 'rails_admin/abstract_model'
 require 'rails_admin/config'
+require 'rails_admin/config/const_load_suppressor'
 require 'rails_admin/extension'
 require 'rails_admin/extensions/cancancan'
 require 'rails_admin/extensions/pundit'
 require 'rails_admin/extensions/paper_trail'
 require 'rails_admin/support/csv_converter'
 require 'rails_admin/support/hash_helper'
-require 'yaml'
+require 'rails_admin/support/serialization_schema'
 
 module RailsAdmin
+  extend RailsAdmin::Config::ConstLoadSuppressor
+
   # Setup RailsAdmin
   #
   # Given the first argument is a model class, a model class name
@@ -17,7 +22,7 @@ module RailsAdmin
   #
   # If only a block is passed it is stored to initializer stack to be evaluated
   # on first request in production mode and on each request in development. If
-  # initialization has already occured (in other words RailsAdmin.setup has
+  # initialization has already occurred (in other words RailsAdmin.setup has
   # been called) the block will be added to stack and evaluated at once.
   #
   # Otherwise returns RailsAdmin::Config class.
@@ -27,33 +32,16 @@ module RailsAdmin
     if entity
       RailsAdmin::Config.model(entity, &block)
     elsif block_given?
-      block.call(RailsAdmin::Config)
+      RailsAdmin::Config::ConstLoadSuppressor.suppressing { yield(RailsAdmin::Config) }
     else
       RailsAdmin::Config
     end
   end
 
-  # Backwards-compatible with safe_yaml/load when SafeYAML isn't available.
-  # Evaluates available YAML loaders at boot and creates appropriate method,
-  # so no conditionals are required at runtime.
-  begin
-    require 'safe_yaml/load'
-    def self.yaml_load(yaml)
-      SafeYAML.load(yaml)
-    end
-  rescue LoadError
-    if YAML.respond_to?(:safe_load)
-      def self.yaml_load(yaml)
-        YAML.safe_load(yaml)
-      end
-    else
-      raise LoadError.new "Safe-loading of YAML is not available. Please install 'safe_yaml' or install Psych 2.0+"
-    end
-  end
-
-  def self.yaml_dump(object)
-    YAML.dump(object)
+  # RailsAdmin's own deprecation warnings go through this, so an application can
+  # configure or silence them independently. Registered as
+  # +app.deprecators[:rails_admin]+ on Rails 7.1+.
+  def self.deprecator
+    @deprecator ||= ActiveSupport::Deprecation.new('5.0', 'RailsAdmin')
   end
 end
-
-require 'rails_admin/bootstrap-sass' unless defined? Bootstrap

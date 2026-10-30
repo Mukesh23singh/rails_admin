@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'rails_admin/config/fields/types/numeric'
 
 module RailsAdmin
@@ -11,7 +13,7 @@ module RailsAdmin
           register_instance_option :html_attributes do
             {
               required: required?,
-              step: "any",
+              step: 'any',
             }
           end
         end

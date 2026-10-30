@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'spec_helper'
 
 RSpec.describe 'Floara field', type: :request do
@@ -25,6 +27,14 @@ RSpec.describe 'Floara field', type: :request do
     end
 
     visit new_path(model_name: 'draft')
-    is_expected.to have_selector("textarea#draft_notes[data-richtext=\"froala-wysiwyg\"][data-options]")
+    is_expected.to have_selector('textarea#draft_notes[data-richtext="froala-wysiwyg"][data-options]')
+  end
+
+  it 'writes back to the textarea when a remote-form modal is submitted', js: true do
+    saved = save_through_modal(:froala) do
+      wait_for_editor %(!!(window.jQuery && jQuery.fn.froalaEditor && jQuery('##{editor_id}').data('froala.editor')))
+      execute_script %(jQuery('##{editor_id}').froalaEditor('html.set', '<p>typed in the modal</p>'))
+    end
+    expect(saved).to include 'typed in the modal'
   end
 end

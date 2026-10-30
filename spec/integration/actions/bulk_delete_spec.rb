@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'spec_helper'
 
 RSpec.describe 'BulkDelete action', type: :request do
@@ -72,17 +74,68 @@ RSpec.describe 'BulkDelete action', type: :request do
       @players = Array.new(3) { FactoryBot.create(:player) }
       @delete_ids = @players[0..1].collect(&:id)
 
-      # NOTE: This uses an internal, unsupported capybara API which could break at any moment. We
-      # should refactor this test so that it either A) uses capybara's supported API (only GET
-      # requests via visit) or B) just uses Rack::Test (and doesn't use capybara for browser
-      # interaction like click_button).
-      page.driver.browser.reset_host!
-      page.driver.browser.process :post, bulk_action_path(bulk_action: 'bulk_delete', model_name: 'player', bulk_ids: @delete_ids, '_method' => 'post')
-      click_button 'Cancel'
+      visit index_path(model_name: 'player')
+      @delete_ids.each { |id| find(%(input[name="bulk_ids[]"][value="#{id}"])).click }
+      click_link 'Selected items'
+      click_link 'Delete selected Players'
     end
 
-    it 'does not delete records' do
+    it 'does not delete records', js: true do
+      find_button('Cancel').trigger('click')
+      is_expected.to have_text 'No actions were taken'
       expect(RailsAdmin::AbstractModel.new('Player').count).to eq(3)
+    end
+  end
+
+  context 'with a configured label_plural' do
+    before do
+      RailsAdmin.config Player do
+        label_plural 'Sportlers'
+      end
+      @players = Array.new(2) { FactoryBot.create(:player) }
+    end
+
+    it 'uses it instead of pluralizing label' do
+      delete(bulk_delete_path(bulk_action: 'bulk_delete', model_name: 'player', bulk_ids: @players.collect(&:id)))
+      expect(flash[:success]).to match(/2 Sportlers successfully deleted/)
+    end
+  end
+
+  context 'with a scope selected' do
+    let!(:left_out) { FactoryBot.create :comment_confirmed, content: 'left out of the default scope' }
+
+    before do
+      RailsAdmin.config Comment::Confirmed do
+        object_label_method :content
+        list do
+          scopes [nil, :unscoped]
+        end
+      end
+    end
+
+    it 'confirms the records the scope leaves' do
+      post(bulk_action_path(bulk_action: 'bulk_delete', model_name: 'comment~confirmed', bulk_ids: [left_out.id], scope: 'unscoped'))
+      expect(response.body).to include left_out.content
+    end
+
+    it 'deletes them' do
+      delete(bulk_delete_path(model_name: 'comment~confirmed', bulk_ids: [left_out.id], scope: 'unscoped'))
+      expect(Comment::Confirmed.unscoped.where(id: left_out.id)).to be_empty
+    end
+  end
+
+  context 'with composite primary keys', composite_primary_keys: true do
+    let!(:fanships) { FactoryBot.create_list(:fanship, 3) }
+
+    it 'provides check boxes for bulk operation' do
+      visit index_path(model_name: 'fanship')
+      fanships.each { |fanship| is_expected.to have_css(%(input[name="bulk_ids[]"][value="#{fanship.id}"])) }
+    end
+
+    it 'deletes selected records' do
+      delete(bulk_delete_path(bulk_action: 'bulk_delete', model_name: 'fanship', bulk_ids: fanships[0..1].map { |fanship| RailsAdmin::Support::CompositeKeysSerializer.serialize(fanship.id) }))
+      expect(flash[:success]).to match(/2 Fanships successfully deleted/)
+      expect(Fanship.all).to eq fanships[2..2]
     end
   end
 end

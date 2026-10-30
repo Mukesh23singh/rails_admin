@@ -1,14 +1,54 @@
+# frozen_string_literal: true
+
 module RailsAdmin
   class Version
-    MAJOR = 3
+    MAJOR = 4
     MINOR = 0
     PATCH = 0
-    PRE = 'alpha'.freeze
+    PRE = 'beta2'
 
     class << self
       # @return [String]
       def to_s
         [MAJOR, MINOR, PATCH, PRE].compact.join('.')
+      end
+
+      def js
+        JSON.parse(File.read("#{__dir__}/../../package.json"))['version']
+      end
+
+      def actual_js_version
+        # :propshaft / :sprockets serve the bundle shipped in the gem, which always matches.
+        # Only an app-built (:external) setup can drift from the gem's expected version.
+        if RailsAdmin.config.asset_source == :external
+          js_version_from_node_modules
+        else
+          js
+        end
+      end
+
+      def warn_with_js_version
+        return unless Rails.env.development? || Rails.env.test?
+
+        case actual_js_version
+        when js
+          # Good
+        when nil
+          warn '[Warning] Failed to detect the RailsAdmin npm package, did you install it?'
+        else
+          warn <<~MSG
+            [Warning] RailsAdmin npm package version inconsistency detected, expected #{js} but actually used is #{actual_js_version}.
+            This may cause partial or total malfunction of RailsAdmin frontend features.
+          MSG
+        end
+      end
+
+    private
+
+      def js_version_from_node_modules
+        JSON.parse(File.read(Rails.root.join('node_modules/rails_admin/package.json')))['version']
+      rescue StandardError
+        nil
       end
     end
   end

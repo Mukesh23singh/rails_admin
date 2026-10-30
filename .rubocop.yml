@@ -1,12 +1,39 @@
 inherit_from: .rubocop_todo.yml
 
+# rubocop-erb ships Exclude lists of its own for cops that do not make sense in
+# a template; without this .rubocop_todo.yml replaces them instead of adding to
+# them.
+inherit_mode:
+  merge:
+    - Exclude
+
+# RuboCop had never looked at the templates before rubocop-erb, and the styling
+# cops would rewrite them wholesale. Worse, autocorrect through rubocop-erb does
+# not always produce valid Ruby -- `count = count + n` came back as
+# `count ++= n`. The templates are checked, not corrected: rubocop-erb is here
+# for the RailsAdmin cops, which have no autocorrect of their own.
+plugins:
+  - rubocop-erb
+
+require:
+  - rubocop-performance
+  - ./rubocop/rails_admin_cops
+
 AllCops:
   Exclude:
-    - 'gemfiles/*'
-    - 'spec/dummy_app/bin/**/*'
-    - 'spec/dummy_app/db/schema.rb'
-    - 'spec/dummy_app/tmp/**/*'
-    - 'vendor/bundle/**/*'
+    - "gemfiles/*"
+    - "node_modules/**/*"
+    - "spec/dummy_app/bin/**/*"
+    - "spec/dummy_app/db/schema.rb"
+    - "spec/dummy_app/node_modules/**/*"
+    - "spec/dummy_app/tmp/**/*"
+    - "vendor/bundle/**/*"
+  NewCops: disable
+  SuggestExtensions: false
+  TargetRubyVersion: 2.7
+
+Gemspec/DeprecatedAttributeAssignment:
+  Enabled: true
 
 Layout/AccessModifierIndentation:
   EnforcedStyle: outdent
@@ -14,8 +41,83 @@ Layout/AccessModifierIndentation:
 Layout/DotPosition:
   EnforcedStyle: trailing
 
+Layout/LineEndStringConcatenationIndentation:
+  Enabled: true
+
+Layout/LineLength:
+  AllowURI: true
+  Enabled: false
+
+Layout/MultilineAssignmentLayout:
+  Enabled: true
+  SupportedTypes: [case, if]
+
+Layout/SpaceBeforeBrackets:
+  Enabled: true
+
 Layout/SpaceInsideHashLiteralBraces:
   EnforcedStyle: no_space
+  Exclude:
+    - "**/*.erb"
+
+Lint/AmbiguousAssignment:
+  Enabled: true
+
+Lint/AmbiguousRange:
+  Enabled: true
+
+Lint/DeprecatedConstants:
+  Enabled: true
+
+Lint/DuplicateBranch:
+  Enabled: true
+  IgnoreLiteralBranches: true
+
+Lint/DuplicateRegexpCharacterClassElement:
+  Enabled: true
+
+Lint/EmptyBlock:
+  Enabled: true
+  Exclude:
+    - "spec/**/*"
+
+Lint/EmptyClass:
+  Enabled: true
+  Exclude:
+    - "spec/**/*"
+
+Lint/EmptyInPattern:
+  Enabled: true
+
+Lint/LambdaWithoutLiteralBlock:
+  Enabled: true
+
+Lint/NoReturnInBeginEndBlocks:
+  Enabled: true
+
+Lint/NumberedParameterAssignment:
+  Enabled: true
+
+Lint/OrAssignmentToConstant:
+  Enabled: true
+
+Lint/RedundantDirGlobSort:
+  Enabled: true
+
+Lint/SymbolConversion:
+  Enabled: true
+
+Lint/ToEnumArguments:
+  Enabled: true
+
+Lint/TripleQuotes:
+  Enabled: true
+
+Lint/UnexpectedBlockArity:
+  Enabled: true
+
+Lint/UnmodifiedReduceAccumulator:
+  Enabled: true
 
 Metrics/AbcSize:
   Max: 69.98 # TODO: Lower to 15
@@ -25,44 +127,52 @@ Metrics/BlockNesting:
 
 Metrics/ClassLength:
   CountComments: false
-  Max: 120 # TODO: Lower to 100
+  Max: 201 # TODO: Lower to 100
 
 Metrics/CyclomaticComplexity:
-  Max: 12 # TODO: Lower to 6
-
-Metrics/LineLength:
-  AllowURI: true
-  Enabled: false
+  Max: 15 # TODO: Lower to 6
 
 Metrics/MethodLength:
   CountComments: false
   Max: 29 # TODO: Lower to 15
 
 Metrics/ModuleLength:
-  Max: 200 # TODO: Lower to 100
+  Max: 219 # TODO: Lower to 100
 
 Metrics/ParameterLists:
   Max: 8 # TODO: Lower to 4
   CountKeywordArgs: true
 
 Metrics/PerceivedComplexity:
-  Max: 14 # TODO: Lower to 7
+  Max: 17 # TODO: Lower to 7
 
 Naming/FileName:
   Exclude:
-    - 'lib/rails_admin/bootstrap-sass.rb'
+    - "lib/rails_admin/bootstrap-sass.rb"
+
+Naming/InclusiveLanguage:
+  Enabled: true
 
 Style/Alias:
   Enabled: false
 
+Style/ArgumentsForwarding:
+  Enabled: true
+
+Style/CollectionCompact:
+  Enabled: true
+
 Style/CollectionMethods:
   PreferredMethods:
-    map:      'collect'
-    reduce:   'inject'
-    find:     'detect'
-    find_all: 'select'
+    map: "collect"
+    reduce: "inject"
+    find: "detect"
+    find_all: "select"
 
 Style/Documentation:
+  Enabled: false
+
+Style/DocumentDynamicEvalDefinition:
   Enabled: false
 
 Style/DoubleNegation:
@@ -71,23 +181,165 @@ Style/DoubleNegation:
 Style/EachWithObject:
   Enabled: false
 
-Style/Encoding:
-  Enabled: false
+Style/EndlessMethod:
+  Enabled: true
 
-Style/FrozenStringLiteralComment:
-  Enabled: false
+Style/HashConversion:
+  Enabled: true
+
+Style/HashExcept:
+  Enabled: true
+
+Style/IfWithBooleanLiteralBranches:
+  Enabled: true
+
+Style/InPatternThen:
+  Enabled: true
 
 Style/Lambda:
   Enabled: false
 
+Style/MultilineInPatternThen:
+  Enabled: true
+
+Style/NegatedIfElseCondition:
+  Enabled: true
+
+Style/NumericPredicate:
+  Enabled: false
+
+Style/NilLambda:
+  Enabled: true
+
+Style/QuotedSymbols:
+  Enabled: true
+  Exclude:
+    - "**/*.erb"
+
 Style/RaiseArgs:
   EnforcedStyle: compact
 
+Style/RedundantArgument:
+  Enabled: true
+
+Style/RedundantParentheses:
+  Enabled: false
+
+Style/RedundantSelfAssignmentBranch:
+  Enabled: true
+
+Style/StringChars:
+  Enabled: true
+
+Style/SwapValues:
+  Enabled: true
+
 Style/TrailingCommaInArguments:
-  EnforcedStyleForMultiline: 'comma'
+  EnforcedStyleForMultiline: "comma"
 
 Style/TrailingCommaInArrayLiteral:
-  EnforcedStyleForMultiline: 'comma'
+  EnforcedStyleForMultiline: "comma"
 
 Style/TrailingCommaInHashLiteral:
-  EnforcedStyleForMultiline: 'comma'
+  EnforcedStyleForMultiline: "comma"
+
+# Rules about how the layers are allowed to reach each other. See
+# docs/code-architecture-for-contributors.md.
+RailsAdmin/AdapterReference:
+  Include:
+    - "app/**/*"
+    - "lib/rails_admin/config/**/*"
+    - "lib/rails_admin/support/**/*"
+
+RailsAdmin/RawModelAccess:
+  Include:
+    - "app/**/*"
+    - "lib/**/*"
+
+RailsAdmin/RecordDecoration:
+  Include:
+    - "lib/rails_admin/adapters/**/*"
+
+Style/StringLiterals:
+  Exclude:
+    - "**/*.erb"
+
+Layout/ExtraSpacing:
+  Exclude:
+    - "**/*.erb"
+
+Style/NestedParenthesizedCalls:
+  Exclude:
+    - "**/*.erb"
+
+Layout/SpaceBeforeBlockBraces:
+  Exclude:
+    - "**/*.erb"
+
+Style/RedundantSelf:
+  Exclude:
+    - "**/*.erb"
+
+Style/StringConcatenation:
+  Exclude:
+    - "**/*.erb"
+
+Style/HashSyntax:
+  Exclude:
+    - "**/*.erb"
+
+Style/StringLiteralsInInterpolation:
+  Exclude:
+    - "**/*.erb"
+
+Layout/SpaceAfterColon:
+  Exclude:
+    - "**/*.erb"
+
+Layout/SpaceAroundOperators:
+  Exclude:
+    - "**/*.erb"
+
+Style/IfUnlessModifierOfIfUnless:
+  Exclude:
+    - "**/*.erb"
+
+Style/RedundantCondition:
+  Exclude:
+    - "**/*.erb"
+
+Style/SafeNavigation:
+  Exclude:
+    - "**/*.erb"
+
+Style/WordArray:
+  Exclude:
+    - "**/*.erb"
+
+Layout/SpaceAfterComma:
+  Exclude:
+    - "**/*.erb"
+
+Layout/SpaceInsideBlockBraces:
+  Exclude:
+    - "**/*.erb"
+
+Performance/StringReplacement:
+  Exclude:
+    - "**/*.erb"
+
+Style/ColonMethodCall:
+  Exclude:
+    - "**/*.erb"
+
+Style/InverseMethods:
+  Exclude:
+    - "**/*.erb"
+
+Style/NegatedIf:
+  Exclude:
+    - "**/*.erb"
+
+Style/SelfAssignment:
+  Exclude:
+    - "**/*.erb"

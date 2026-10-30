@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module RailsAdmin
   module Extensions
     module Pundit
@@ -7,7 +9,7 @@ module RailsAdmin
       class AuthorizationAdapter
         # This method is called first time only and used for setup
         def self.setup
-          RailsAdmin::Extensions::ControllerExtension.send(:include, ::Pundit)
+          RailsAdmin::Extensions::ControllerExtension.include defined?(::Pundit::Authorization) ? ::Pundit::Authorization : ::Pundit
         end
 
         # See the +authorize_with+ config method for where the initialization happens.
@@ -21,10 +23,9 @@ module RailsAdmin
         # AbstractModel instance that applies. The third argument is the actual model
         # instance if it is available.
         def authorize(action, abstract_model = nil, model_object = nil)
-          record = model_object || abstract_model && abstract_model.model
-          if action && !policy(record).send(action_for_pundit(action))
-            raise ::Pundit::NotAuthorizedError.new("not allowed to #{action} this #{record}")
-          end
+          record = model_object || abstract_model&.model
+          raise ::Pundit::NotAuthorizedError.new("not allowed to #{action} this #{record}") if action && !policy(record).send(action_for_pundit(action))
+
           @controller.instance_variable_set(:@_pundit_policy_authorized, true)
         end
 
@@ -33,7 +34,7 @@ module RailsAdmin
         # This takes the same arguments as +authorize+. The difference is that this will
         # return a boolean whereas +authorize+ will raise an exception when not authorized.
         def authorized?(action, abstract_model = nil, model_object = nil)
-          record = model_object || abstract_model && abstract_model.model
+          record = model_object || abstract_model&.model
           policy(record).send(action_for_pundit(action)) if action
         end
 
@@ -41,16 +42,17 @@ module RailsAdmin
         # and bulk_delete/destroy actions and should return a scope which limits the records
         # to those which the user can perform the given action on.
         def query(_action, abstract_model)
-          @controller.send(:policy_scope, abstract_model.model.all)
+          @controller.send(:policy_scope, abstract_model.scoped)
         rescue ::Pundit::NotDefinedError
-          abstract_model.model.all
+          # Fail closed: a missing policy scope must not be treated as "no restriction".
+          abstract_model.none
         end
 
         # This is called in the new/create actions to determine the initial attributes for new
         # records. It should return a hash of attributes which match what the user
         # is authorized to create.
         def attributes_for(action, abstract_model)
-          record = abstract_model && abstract_model.model
+          record = abstract_model&.model
           policy(record).try(:attributes_for, action) || {}
         end
 

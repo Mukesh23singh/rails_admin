@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'rails_admin/config/sections/base'
 
 module RailsAdmin
@@ -28,12 +30,12 @@ module RailsAdmin
           nil
         end
 
-        register_instance_option :sort_by do
-          parent.abstract_model.primary_key
+        register_instance_option :search_help do
+          nil
         end
 
-        register_instance_option :sort_reverse? do
-          true # By default show latest first
+        register_instance_option :sort_by do
+          parent.abstract_model.primary_key
         end
 
         register_instance_option :scopes do
@@ -44,23 +46,8 @@ module RailsAdmin
           ''
         end
 
-        register_instance_option :sidescroll do
-          nil
-        end
-
-        def sidescroll_frozen_columns
-          global_config = RailsAdmin::Config.sidescroll
-          model_config = sidescroll
-          enabled = model_config.nil? ? global_config : model_config
-          if enabled
-            num_frozen = model_config[:num_frozen_columns] if model_config.is_a?(Hash)
-            unless num_frozen
-              num_frozen = global_config[:num_frozen_columns] if global_config.is_a?(Hash)
-              num_frozen ||= 3 # by default, freeze checkboxes, links & first property (usually primary key / id?)
-              num_frozen -= 1 unless checkboxes? # model config should be explicit about this, only adjust if using global config
-            end
-            num_frozen
-          end
+        def fields_for_table
+          visible_fields.partition(&:sticky?).flatten
         end
       end
     end

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'spec_helper'
 
 RSpec.describe RailsAdmin::Config::Model do
@@ -9,8 +11,21 @@ RSpec.describe RailsAdmin::Config::Model do
     end
 
     it 'returns false when included, true otherwise' do
-      expect(RailsAdmin.config(Player).excluded?).to be_truthy
-      expect(RailsAdmin.config(Comment).excluded?).to be_falsey
+      allow(RailsAdmin::AbstractModel).to receive(:all).and_call_original
+
+      player_config = RailsAdmin.config(Player)
+      expect(player_config.excluded?).to be_truthy
+      expect(RailsAdmin::AbstractModel).to have_received(:all).once
+      # Calling a second time uses the cached value.
+      expect(player_config.excluded?).to be_truthy
+      expect(RailsAdmin::AbstractModel).to have_received(:all).once
+
+      comment_config = RailsAdmin.config(Comment)
+      expect(comment_config.excluded?).to be_falsey
+      expect(RailsAdmin::AbstractModel).to have_received(:all).twice
+      # Calling a second time uses the cached value.
+      expect(comment_config.excluded?).to be_falsey
+      expect(RailsAdmin::AbstractModel).to have_received(:all).twice
     end
   end
 
@@ -35,9 +50,31 @@ RSpec.describe RailsAdmin::Config::Model do
   end
 
   describe '#object_label_method' do
-    it 'is first of Config.label_methods if found as a column on model, or :rails_admin_default_object_label_method' do
-      expect(RailsAdmin.config(Comment).object_label_method).to eq(:rails_admin_default_object_label_method)
+    it 'is the first of Config.label_methods the model answers to' do
       expect(RailsAdmin.config(Division).object_label_method).to eq(:name)
+    end
+
+    it 'is nil when the model answers to none of them' do
+      expect(RailsAdmin.config(Comment).object_label_method).to be_nil
+    end
+  end
+
+  describe '#object_label' do
+    it 'asks the record for the configured label method' do
+      expect(RailsAdmin.config(Division).object_label(Division.new(name: 'Yankees'))).to eq 'Yankees'
+    end
+
+    it 'falls back to the class and the id when the model has no label method' do
+      comment = FactoryBot.create :comment
+      expect(RailsAdmin.config(Comment).object_label(comment)).to eq "Comment ##{comment.id}"
+    end
+
+    it 'falls back for a record that is not saved yet' do
+      expect(RailsAdmin.config(Comment).object_label(Comment.new)).to eq 'new Comment'
+    end
+
+    it 'falls back when the configured label method has nothing to say' do
+      expect(RailsAdmin.config(Division).object_label(Division.new)).to eq 'new Division'
     end
   end
 
@@ -79,11 +116,12 @@ RSpec.describe RailsAdmin::Config::Model do
                                           i18n: {
                                             plural: {
                                               rule: ->(count) do
-                                                if count == 0
+                                                case count
+                                                when 0
                                                   :zero
-                                                elsif count == 1
+                                                when 1
                                                   :one
-                                                elsif count == 2
+                                                when 2
                                                   :two
                                                 else
                                                   :other
@@ -123,6 +161,32 @@ RSpec.describe RailsAdmin::Config::Model do
 
     it 'is parent module otherwise' do
       expect(RailsAdmin.config(Cms::BasicPage).navigation_label).to eq('Cms')
+    end
+  end
+
+  describe '#last_created_at', active_record: true do
+    let!(:teams) do
+      [FactoryBot.create(:team, created_at: 1.day.ago), FactoryBot.create(:team, created_at: 2.days.ago)]
+    end
+
+    it 'is when the record added last was created' do
+      expect(RailsAdmin.config(Team).last_created_at.to_date).to eq 2.days.ago.to_date
+    end
+
+    it 'is nil for a model with nothing to go by' do
+      expect(RailsAdmin.config(Comment).last_created_at).to be_nil
+    end
+
+    context 'when customized' do
+      before do
+        RailsAdmin.config(Team) do
+          last_created_at { abstract_model.model.maximum(:created_at) }
+        end
+      end
+
+      it 'allow customization' do
+        expect(RailsAdmin.config(Team).last_created_at.to_date).to eq 1.day.ago.to_date
+      end
     end
   end
 end

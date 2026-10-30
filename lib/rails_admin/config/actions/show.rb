@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module RailsAdmin
   module Config
     module Actions
@@ -19,14 +21,14 @@ module RailsAdmin
         register_instance_option :controller do
           proc do
             respond_to do |format|
-              format.json { render json: @object }
               format.html { render @action.template_name }
+              format.json { render json: @object.to_json(serialization_schema.default) }
             end
           end
         end
 
         register_instance_option :link_icon do
-          'icon-info-sign'
+          'fas fa-info-circle'
         end
       end
     end

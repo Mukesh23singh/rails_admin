@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'spec_helper'
 
 RSpec.describe 'RailsAdmin::FormBuilder', type: :helper do
@@ -13,6 +15,9 @@ RSpec.describe 'RailsAdmin::FormBuilder', type: :helper do
       (@object = Player.new).save
       @builder = RailsAdmin::FormBuilder.new(:player, @object, helper, {})
       allow(@builder).to receive(:field_for).and_return('field')
+      action = double
+      allow(action).to receive(:enabled?).and_return true
+      helper.instance_variable_set :@action, action
     end
 
     it 'does not add additional error div from default ActionView::Base.field_error_proc' do
@@ -21,7 +26,7 @@ RSpec.describe 'RailsAdmin::FormBuilder', type: :helper do
     end
 
     it 'hidden fields should be wrapper' do
-      expect(@builder.generate(action: :create, model_config: RailsAdmin.config(Player))).to match('form-group control-group hidden_type number_field')
+      expect(@builder.generate(action: :create, model_config: RailsAdmin.config(Player))).to match('control-group row mb-3 hidden_type number_field')
     end
   end
 
@@ -41,6 +46,30 @@ RSpec.describe 'RailsAdmin::FormBuilder', type: :helper do
 
       it 'does not break' do
         expect(@builder.object_infos).to eql '<span style="display:none" class="object-infos" data-model-label="Fan" data-object-label="foo"></span>'
+      end
+    end
+
+    # A nested form names a record whose label method has nothing to say after
+    # the model label, where the rest of the admin uses the class name.
+    context 'when the label method has nothing to say' do
+      before do
+        RailsAdmin.config(Fan) { label 'Supporter' }
+        @object.name = ''
+      end
+
+      it 'labels it with the model label and the id' do
+        expect(@builder.object_infos).to include %(data-object-label="Supporter ##{@object.id}")
+      end
+    end
+
+    context 'when the model has no label method' do
+      before { RailsAdmin.config(Comment) { label 'Remark' } }
+
+      it 'labels it with the class and the id' do
+        object = Comment.create!
+        builder = RailsAdmin::FormBuilder.new(:comment, object, helper, {})
+
+        expect(builder.object_infos).to include %(data-object-label="Comment ##{object.id}")
       end
     end
   end

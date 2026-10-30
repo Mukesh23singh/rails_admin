@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module RailsAdmin
   module Config
     # A module for all configurables.
@@ -7,9 +9,9 @@ module RailsAdmin
         base.send :extend, ClassMethods
       end
 
-      def has_option?(name) # rubocop:disable Naming/PredicateName
+      def has_option?(name) # rubocop:disable Naming/PredicatePrefix
         options = self.class.instance_variable_get('@config_options')
-        options && options.key?(name)
+        options&.key?(name)
       end
 
       # Register an instance option for this object only
@@ -55,7 +57,8 @@ module RailsAdmin
 
           # If it's a boolean create an alias for it and remove question mark
           if option_name.end_with?('?')
-            scope.send(:define_method, "#{option_name.chop!}?") do
+            option_name = option_name.chop
+            scope.send(:define_method, "#{option_name}?") do
               send(option_name)
             end
           end
@@ -82,12 +85,12 @@ module RailsAdmin
         def register_deprecated_instance_option(option_name, replacement_option_name = nil, scope = self)
           scope.send(:define_method, option_name) do |*args, &block|
             if replacement_option_name
-              ActiveSupport::Deprecation.warn("The #{option_name} configuration option is deprecated, please use #{replacement_option_name}.")
+              RailsAdmin.deprecator.warn("The #{option_name} configuration option is deprecated, please use #{replacement_option_name}.")
               send(replacement_option_name, *args, &block)
             elsif block_given?
               yield
             else
-              raise("The #{option_name} configuration option is removed without replacement.")
+              raise "The #{option_name} configuration option is removed without replacement."
             end
           end
         end

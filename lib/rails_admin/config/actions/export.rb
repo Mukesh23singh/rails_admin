@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module RailsAdmin
   module Config
     module Actions
@@ -9,14 +11,16 @@ module RailsAdmin
         end
 
         register_instance_option :http_methods do
-          [:get, :post]
+          %i[get post]
         end
 
         register_instance_option :controller do
           proc do
-            if format = params[:json] && :json || params[:csv] && :csv || params[:xml] && :xml
+            format = params[:json] && :json || params[:csv] && :csv || params[:xml] && :xml
+            if format
               request.format = format
-              @schema = HashHelper.symbolize(params[:schema].slice(:except, :include, :methods, :only).permit!.to_h) if params[:schema] # to_json and to_xml expect symbols for keys AND values.
+              serialization_schema # built while @action is still export
+              @schema = serialization_schema.sanitize(params[:schema].slice(:include, :methods, :only).permit!.to_h) if params[:schema]
               @objects = list_entries(@model_config, :export)
               index
             else
@@ -30,7 +34,7 @@ module RailsAdmin
         end
 
         register_instance_option :link_icon do
-          'icon-share'
+          'fas fa-file-export'
         end
       end
     end

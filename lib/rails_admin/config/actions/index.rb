@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'activemodel-serializers-xml'
 
 module RailsAdmin
@@ -11,7 +13,7 @@ module RailsAdmin
         end
 
         register_instance_option :http_methods do
-          [:get, :post]
+          %i[get post]
         end
 
         register_instance_option :route_fragment do
@@ -20,7 +22,8 @@ module RailsAdmin
 
         register_instance_option :breadcrumb_parent do
           parent_model = bindings[:abstract_model].try(:config).try(:parent)
-          if am = parent_model && RailsAdmin.config(parent_model).try(:abstract_model)
+          am = parent_model && RailsAdmin.config(parent_model).try(:abstract_model)
+          if am
             [:index, am]
           else
             [:dashboard]
@@ -29,17 +32,8 @@ module RailsAdmin
 
         register_instance_option :controller do
           proc do
-            @objects ||= list_entries
-
-            unless @model_config.list.scopes.empty?
-              if params[:scope].blank?
-                unless @model_config.list.scopes.first.nil?
-                  @objects = @objects.send(@model_config.list.scopes.first)
-                end
-              elsif @model_config.list.scopes.collect(&:to_s).include?(params[:scope])
-                @objects = @objects.send(params[:scope].to_sym)
-              end
-            end
+            association_scope = get_association_scope_from_params
+            @objects ||= @association ? association_entries(@model_config, association_scope) : list_entries
 
             respond_to do |format|
               format.html do
@@ -47,15 +41,17 @@ module RailsAdmin
               end
 
               format.json do
-                output = begin
+                output =
                   if params[:compact]
-                    primary_key_method = @association ? @association.associated_primary_key : @model_config.abstract_model.primary_key
-                    label_method = @model_config.object_label_method
-                    @objects.collect { |o| {id: o.send(primary_key_method).to_s, label: o.send(label_method).to_s} }
+                    if @association
+                      @association.collection(@objects).collect { |(label, id)| {id: id, label: label} }
+                    else
+                      @objects.collect { |object| {id: object.id.to_s, label: @model_config.object_label(object).to_s} }
+                    end
                   else
-                    @objects.to_json(@schema)
+                    @objects.to_json(@schema || serialization_schema.default)
                   end
-                end
+
                 if params[:send_data]
                   send_data output, filename: "#{params[:model_name]}_#{DateTime.now.strftime('%Y-%m-%d_%Hh%Mm%S')}.json"
                 else
@@ -64,7 +60,7 @@ module RailsAdmin
               end
 
               format.xml do
-                output = @objects.to_xml(@schema)
+                output = @objects.to_xml(@schema || serialization_schema.default)
                 if params[:send_data]
                   send_data output, filename: "#{params[:model_name]}_#{DateTime.now.strftime('%Y-%m-%d_%Hh%Mm%S')}.xml"
                 else
@@ -87,7 +83,7 @@ module RailsAdmin
         end
 
         register_instance_option :link_icon do
-          'icon-th-list'
+          'fas fa-th-list'
         end
       end
     end

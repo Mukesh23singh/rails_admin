@@ -1,11 +1,11 @@
-require 'jquery-rails'
-require 'jquery-ui-rails'
+# frozen_string_literal: true
+
 require 'kaminari'
-require 'nested_form'
-require 'rack-pjax'
 require 'rails'
 require 'rails_admin'
-require 'remotipart'
+require 'rails_admin/extensions/url_for_extension'
+require 'rails_admin/version'
+require 'turbo-rails'
 
 module RailsAdmin
   class Engine < Rails::Engine
@@ -13,56 +13,67 @@ module RailsAdmin
 
     config.action_dispatch.rescue_responses['RailsAdmin::ActionNotAllowed'] = :forbidden
 
-    initializer 'RailsAdmin precompile hook', group: :all do |app|
-      app.config.assets.precompile += %w(
-        rails_admin/rails_admin.js
-        rails_admin/rails_admin.css
-        rails_admin/jquery.colorpicker.js
-        rails_admin/jquery.colorpicker.css
-      )
+    initializer 'RailsAdmin load UrlForExtension' do
+      RailsAdmin::Engine.routes.singleton_class.prepend(RailsAdmin::Extensions::UrlForExtension)
     end
 
-    initializer 'RailsAdmin setup middlewares' do |app|
-      app.config.middleware.use Rack::Pjax
+    initializer 'RailsAdmin deprecator' do |app|
+      app.deprecators[:rails_admin] = RailsAdmin.deprecator if app.respond_to?(:deprecators)
     end
 
-    initializer 'RailsAdmin reload config in development' do
-      if Rails.application.config.cache_classes
-        if defined?(ActiveSupport::Reloader)
-          ActiveSupport::Reloader.before_class_unload do
-            RailsAdmin::Config.reset_all_models
-          end
-          # else
-          # For Rails 4 not implemented
+    initializer 'RailsAdmin reload config in development' do |app|
+      config.initializer_path = app.root.join('config/initializers/rails_admin.rb')
+
+      unless Rails.application.config.cache_classes
+        ActiveSupport::Reloader.before_class_unload do
+          RailsAdmin::Config.reload!
         end
+
+        reloader = app.config.file_watcher.new([config.initializer_path], []) do
+          # Do nothing, ActiveSupport::Reloader will trigger class_unload! anyway
+        end
+
+        app.reloaders << reloader
+        app.reloader.to_run do
+          reloader.execute_if_updated { require_unload_lock! }
+        end
+        reloader.execute
       end
     end
 
-    rake_tasks do
-      Dir[File.join(File.dirname(__FILE__), '../tasks/*.rake')].each { |f| load f }
+    initializer 'RailsAdmin assets', group: :all do |app|
+      next unless app.config.respond_to?(:assets)
+
+      builds_path = RailsAdmin::Engine.root.join('app/assets/builds').to_s
+      app.config.assets.paths << builds_path unless app.config.assets.paths.include?(builds_path)
+
+      app.config.assets.precompile += %w[rails_admin.js rails_admin.css] if RailsAdmin.config.asset_source == :sprockets
     end
 
     # Check for required middlewares, users may forget to use them in Rails API mode
     config.after_initialize do |app|
       has_session_store = app.config.middleware.to_a.any? do |m|
         m.klass.try(:<=, ActionDispatch::Session::AbstractStore) ||
+          m.klass.try(:<=, ActionDispatch::Session::AbstractSecureStore) ||
           m.klass.name =~ /^ActionDispatch::Session::/
       end
       loaded = app.config.middleware.to_a.map(&:name)
-      required = %w(ActionDispatch::Cookies ActionDispatch::Flash Rack::MethodOverride)
+      required = %w[ActionDispatch::Cookies ActionDispatch::Flash Rack::MethodOverride]
       missing = required - loaded
       unless missing.empty? && has_session_store
         configs = missing.map { |m| "config.middleware.use #{m}" }
         configs << "config.middleware.use #{app.config.session_store.try(:name) || 'ActionDispatch::Session::CookieStore'}, #{app.config.session_options}" unless has_session_store
-        raise <<-EOM
-Required middlewares for RailsAdmin are not added
-To fix this, add
+        raise <<~ERROR
+          Required middlewares for RailsAdmin are not added
+          To fix this, add
 
-  #{configs.join("\n  ")}
+            #{configs.join("\n  ")}
 
-to config/application.rb.
-        EOM
+          to config/application.rb.
+        ERROR
       end
+
+      RailsAdmin::Version.warn_with_js_version
     end
   end
 end

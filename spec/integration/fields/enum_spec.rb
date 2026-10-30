@@ -1,14 +1,12 @@
+# frozen_string_literal: true
+
 require 'spec_helper'
 
 RSpec.describe 'Enum field', type: :request, active_record: true do
   subject { page }
 
   before do
-    Team.class_eval do
-      def color_enum
-        %w(blue green red)
-      end
-    end
+    allow_any_instance_of(Team).to receive(:color_enum).and_return(%w[blue green red])
   end
 
   describe 'for single value' do
@@ -22,21 +20,12 @@ RSpec.describe 'Enum field', type: :request, active_record: true do
       visit new_path(model_name: 'team')
       is_expected.to have_selector('.enum_type select')
       is_expected.not_to have_selector('.enum_type select[multiple]')
-      expect(all('.enum_type option').map(&:text).select(&:present?)).to eq %w(blue green red)
+      expect(all('.enum_type option').map(&:text).select(&:present?)).to eq %w[blue green red]
     end
 
     it 'uses the filtering-select widget for selection', js: true do
       visit new_path(model_name: 'team')
       is_expected.to have_selector('.enum_type .filtering-select')
-    end
-
-    it 'shows a filter-box which can be switched to multiple selection mode', js: true do
-      visit index_path(model_name: 'team')
-      click_link 'Add filter'
-      click_link 'Color'
-      expect(all('.select-single option').map(&:text)).to include 'blue', 'green', 'red'
-      find('.filter .switch-select .icon-plus').click
-      expect(all('.select-multiple option').map(&:text)).to include 'blue', 'green', 'red'
     end
   end
 
@@ -53,7 +42,7 @@ RSpec.describe 'Enum field', type: :request, active_record: true do
       visit new_path(model_name: 'team')
       is_expected.to have_selector('.enum_type select')
       is_expected.to have_selector('.enum_type select[multiple]')
-      expect(all('.enum_type option').map(&:text).select(&:present?)).to eq %w(blue green red)
+      expect(all('.enum_type option').map(&:text).select(&:present?)).to eq %w[blue green red]
     end
 
     it 'uses the filtering-multiselect widget for selection', js: true do

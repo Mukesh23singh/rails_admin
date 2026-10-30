@@ -5,39 +5,111 @@ on: [push, pull_request]
 jobs:
   rspec:
     name: RSpec
+    # A suite which hangs rather than fails should not sit out the 6-hour default
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        ruby: [ 2.6, 2.7, 3.0, jruby ]
-        gemfile: [ gemfiles/rails_6.1.gemfile ]
-        orm: [ active_record ]
-        adapter: [ sqlite3 ]
+        ruby:
+          - "3.2"
+          - "3.3"
+          - "3.4"
+        gemfile: [gemfiles/rails_8.1.gemfile]
+        orm: [active_record]
+        adapter: [sqlite3]
+        asset: [propshaft]
         include:
-          - ruby: 2.5
-            gemfile: gemfiles/rails_6.0.gemfile
+          - ruby: 2.7
+            gemfile: gemfiles/rails_7.0.gemfile
             orm: active_record
             adapter: sqlite3
-          - ruby: 3.0
-            gemfile: gemfiles/rails_6.1.gemfile
+            asset: sprockets
+          - ruby: "3.0"
+            gemfile: gemfiles/rails_7.0.gemfile
+            orm: active_record
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: "3.1"
+            gemfile: gemfiles/rails_7.1.gemfile
+            orm: active_record
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: "3.2"
+            gemfile: gemfiles/rails_7.2.gemfile
+            orm: active_record
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: "3.3"
+            gemfile: gemfiles/rails_8.0.gemfile
+            orm: active_record
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: "3.4"
+            gemfile: gemfiles/rails_8.1.gemfile
             orm: active_record
             adapter: mysql2
-          - ruby: 3.0
-            gemfile: gemfiles/rails_6.1.gemfile
+            asset: propshaft
+          - ruby: "3.4"
+            gemfile: gemfiles/rails_8.1.gemfile
             orm: active_record
             adapter: postgresql
+            asset: sprockets
+          - ruby: "3.4"
+            gemfile: gemfiles/rails_8.1.gemfile
+            orm: active_record
+            adapter: sqlite3
+            asset: external
+          - ruby: "3.4"
+            gemfile: gemfiles/rails_8.1.gemfile
+            orm: active_record
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: "3.2"
+            gemfile: gemfiles/composite_primary_keys.gemfile
+            orm: active_record
+            adapter: sqlite3
+            asset: sprockets
           - ruby: 2.7
-            gemfile: gemfiles/rails_6.0.gemfile
+            gemfile: gemfiles/rails_7.0.gemfile
             orm: mongoid
             adapter: sqlite3
-          - ruby: 3.0
-            gemfile: gemfiles/rails_6.1.gemfile
+            asset: sprockets
+          - ruby: "3.1"
+            gemfile: gemfiles/rails_7.0.gemfile
             orm: mongoid
             adapter: sqlite3
-          - ruby: jruby
-            gemfile: gemfiles/rails_6.1.gemfile
+            asset: sprockets
+          - ruby: "3.2"
+            gemfile: gemfiles/rails_7.1.gemfile
             orm: mongoid
             adapter: sqlite3
-    runs-on: ubuntu-16.04
+            asset: sprockets
+          - ruby: "3.3"
+            gemfile: gemfiles/rails_7.2.gemfile
+            orm: mongoid
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: "3.4"
+            gemfile: gemfiles/rails_8.0.gemfile
+            orm: mongoid
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: "3.4"
+            gemfile: gemfiles/rails_8.1.gemfile
+            orm: mongoid
+            adapter: sqlite3
+            asset: sprockets
+          - ruby: jruby-9.4
+            gemfile: gemfiles/rails_7.1.gemfile
+            orm: active_record
+            adapter: mysql2
+            asset: sprockets
+          - ruby: jruby-9.4
+            gemfile: gemfiles/rails_7.1.gemfile
+            orm: mongoid
+            adapter: sqlite3
+            asset: sprockets
+    runs-on: ubuntu-latest
     services:
       mysql:
         image: mysql:8.0
@@ -60,68 +132,106 @@ jobs:
     env:
       BUNDLE_GEMFILE: ${{ matrix.gemfile }}
       CI_ORM: ${{ matrix.orm }}
+      CI_ASSET: ${{ matrix.asset }}
       JRUBY_OPTS: --debug
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: ${{ matrix.ruby }}
-    - name: Cache gems
-      uses: actions/cache@v2
-      with:
-        path: vendor/bundle
-        key: ${{ runner.os }}-gems-${{ matrix.ruby }}-${{ hashFiles('Gemfile', 'gemfiles/*.gemfile') }}
-        restore-keys: |
-          ${{ runner.os }}-gems-${{ matrix.ruby }}-
-    - name: Install dependencies
-      run: bundle install --without development --jobs=3 --retry=3 --path=vendor/bundle
-    - name: Setup application
-      env:
-        BUNDLE_GEMFILE: ../../${{ matrix.gemfile }}
-        CI_DB_ADAPTER: ${{ matrix.adapter }}
-        RAILS_ENV: test
-      run: |
-        cd spec/dummy_app
-        bundle exec rake rails_admin:prepare_ci_env db:create db:migrate
-        cd ../../
-    - name: Run tests
-      run: bundle exec rake spec
-    - name: Coveralls Parallel
-      uses: coverallsapp/github-action@master
-      continue-on-error: true
-      with:
-        github-token: ${{ secrets.github_token }}
-        flag-name: run-${{ matrix.ruby }}-${{ matrix.gemfile }}-${{ matrix.orm }}-${{ matrix.adapter }}
-        parallel: true
+      - uses: actions/checkout@v4
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          cache-version: gems-${{ hashFiles('Gemfile', 'gemfiles/*.gemfile') }}
+        env:
+          MAKEFLAGS: make --jobs 4
+          BUNDLE_WITHOUT: development
+      # Only the :external asset_source builds anything; :propshaft / :sprockets
+      # serve the committed bundle, so those jobs run with no Node at all.
+      - name: Set up Node
+        if: matrix.asset == 'external'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install ImageMagick
+        run: sudo apt-get update && sudo apt-get install -y imagemagick
+      - name: Setup application
+        env:
+          BUNDLE_GEMFILE: ../../${{ matrix.gemfile }}
+          CI_ASSET: ${{ matrix.asset }}
+          CI_DB_ADAPTER: ${{ matrix.adapter }}
+          RAILS_ENV: test
+        run: |
+          if [ "${{ matrix.asset }}" = "external" ]; then npm ci; fi
+          cd spec/dummy_app
+          bundle exec rake rails_admin:prepare_ci_env db:create db:schema:load
+      - name: Run tests
+        run: bundle exec rspec
+      - name: Coveralls Parallel
+        if: ${{ github.repository_owner == 'railsadminteam' }}
+        uses: coverallsapp/github-action@v2
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.github_token }}
+          flag-name: run-${{ matrix.ruby }}-${{ matrix.gemfile }}-${{ matrix.orm }}-${{ matrix.adapter }}
+          parallel: true
 
   coveralls:
     name: Coveralls
+    if: ${{ github.repository_owner == 'railsadminteam' }}
     needs: rspec
-    runs-on: ubuntu-16.04
+    runs-on: ubuntu-latest
     steps:
       - name: Coveralls Finished
-        uses: coverallsapp/github-action@master
+        uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.github_token }}
           parallel-finished: true
 
+  assets:
+    name: Precompiled assets (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Rebuild assets
+        run: npm run build
+      - name: Check committed assets are up to date
+        run: git diff --exit-code -- app/assets/builds
+
+  prettier:
+    name: Prettier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm ci
+      - name: Run check
+        run: npm run format:check
+
   rubocop:
     name: RuboCop
-    runs-on: ubuntu-16.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: 2.7
-      - name: Cache gems
-        uses: actions/cache@v2
-        with:
-          path: vendor/bundle
-          key: ${{ runner.os }}-gems-${{ matrix.ruby }}-${{ hashFiles('Gemfile') }}
-          restore-keys: |
-            ${{ runner.os }}-gems-${{ matrix.ruby }}-
+          ruby-version: "3.2"
+          bundler-cache: true
+          cache-version: gems-${{ hashFiles('Gemfile') }}
       - name: Install dependencies
         run: bundle install --without development --jobs=3 --retry=3 --path=vendor/bundle
       - name: Run check

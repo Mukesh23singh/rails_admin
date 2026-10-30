@@ -1,7 +1,16 @@
+# frozen_string_literal: true
+
 require 'spec_helper'
 require 'timecop'
 
 RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
+  it_behaves_like 'a RailsAdmin adapter' do
+    let(:adapter_record_type) { ActiveRecord::Base }
+    let(:adapter_property_type) { RailsAdmin::Adapters::ActiveRecord::Property }
+    let(:adapter_association_type) { RailsAdmin::Adapters::ActiveRecord::Association }
+    let(:adapter_missing_id) { 'abc' }
+  end
+
   let(:activerecord_config) do
     if ::ActiveRecord::Base.respond_to? :connection_db_config
       ::ActiveRecord::Base.connection_db_config.configuration_hash
@@ -10,15 +19,41 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
     end
   end
   let(:like) do
-    if ['postgresql', 'postgis'].include? activerecord_config[:adapter]
+    if %w[postgresql postgis].include? activerecord_config[:adapter]
       '(field ILIKE ?)'
     else
       '(LOWER(field) LIKE ?)'
     end
   end
+  let(:not_like) do
+    if %w[postgresql postgis].include? activerecord_config[:adapter]
+      '(field NOT ILIKE ?)'
+    else
+      '(LOWER(field) NOT LIKE ?)'
+    end
+  end
 
   def predicates_for(scope)
     scope.where_clause.instance_variable_get(:@predicates)
+    #          .map do |predicate|
+    #       if predicate.is_a? Arel::Nodes::BoundSqlLiteral
+    #         binds = predicate.positional_binds
+    #         predicate.sql_with_placeholders.delete_prefix('(').delete_suffix(')').gsub('?') do |_|
+    #           bind = binds.shift
+    #           case bind
+    #           when Date
+    #             "'#{bind.to_fs(:db)}'"
+    #           when DateTime, Time
+    #             "'#{bind.to_fs(:db)}'"
+    #           else
+    #             p bind
+    #             bind.to_s
+    #           end
+    #         end
+    #       else
+    #         predicate
+    #       end
+    #          end
   end
 
   describe '#associations' do
@@ -41,38 +76,26 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
     end
   end
 
+  # Behavior shared with the other adapters lives in 'a RailsAdmin adapter'
+  # (spec/shared_examples/shared_examples_for_adapters.rb). Only what is specific
+  # to ActiveRecord stays here.
   describe 'data access methods' do
     let(:abstract_model) { RailsAdmin::AbstractModel.new('Player') }
-
-    before do
-      @players = FactoryBot.create_list(:player, 3) + [
+    let!(:players) do
+      FactoryBot.create_list(:player, 3) + [
         # Multibyte players
         FactoryBot.create(:player, name: 'Антоха'),
         FactoryBot.create(:player, name: 'Петруха'),
       ]
     end
 
-    it '#new returns instance of AbstractObject' do
-      expect(abstract_model.new.object).to be_instance_of(Player)
-    end
-
-    it '#get returns instance of AbstractObject' do
-      expect(abstract_model.get(@players.first.id).object).to eq(@players.first)
-    end
-
-    it '#get returns nil when id does not exist' do
-      expect(abstract_model.get('abc')).to be_nil
-    end
-
-    it '#first returns a player' do
-      expect(@players).to include abstract_model.first
+    # Mongoid provides no GlobalID support, so this cannot be part of the shared
+    # contract. Regression test for the removal of the AbstractObject proxy (#2847).
+    it '#get returns an object that can be passed to ActiveJob' do
+      expect { NullJob.perform_later(abstract_model.get(players.first.id)) }.not_to raise_error
     end
 
     describe '#count' do
-      it 'returns count of items' do
-        expect(abstract_model.count).to eq(@players.count)
-      end
-
       context 'when default-scoped with select' do
         before do
           class PlayerWithDefaultScope < Player
@@ -83,74 +106,161 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
         let(:abstract_model) { RailsAdmin::AbstractModel.new('PlayerWithDefaultScope') }
 
         it 'does not break' do
-          expect(abstract_model.count).to eq(@players.count)
+          expect(abstract_model.count).to eq(players.count)
         end
       end
     end
 
-    it '#destroy destroys multiple items' do
-      abstract_model.destroy(@players[0..1])
-      expect(Player.all).to eq(@players[2..-1])
-    end
-
-    it '#where returns filtered results' do
-      expect(abstract_model.where(name: @players.first.name)).to eq([@players.first])
-    end
-
     describe '#all' do
-      it 'works without options' do
-        expect(abstract_model.all).to match_array @players
-      end
-
       it 'supports eager loading' do
         expect(abstract_model.all(include: :team).includes_values).to eq([:team])
       end
 
-      it 'supports limiting' do
-        expect(abstract_model.all(limit: 2).size).to eq(2)
+      it 'supports retrieval by bulk_ids with composite primary keys', composite_primary_keys: true do
+        expect(RailsAdmin::AbstractModel.new(Fanship).all(
+          bulk_ids: %w[1_2 3_4],
+        ).to_sql.tr('`', '"')).to include 'WHERE ("fans_teams"."fan_id" = 1 AND "fans_teams"."team_id" = 2 OR "fans_teams"."fan_id" = 3 AND "fans_teams"."team_id" = 4)'
       end
 
-      it 'supports retrieval by bulk_ids' do
-        expect(abstract_model.all(bulk_ids: @players[0..1].collect(&:id))).to match_array @players[0..1]
-      end
-
-      it 'supports pagination' do
-        expect(abstract_model.all(sort: 'id', page: 2, per: 1)).to eq(@players[-2, 1])
-        expect(abstract_model.all(sort: 'id', page: 1, per: 2)).to eq(@players[-2, 2].reverse)
-      end
-
-      it 'supports ordering' do
-        expect(abstract_model.all(sort: 'id', sort_reverse: true)).to eq(@players.sort)
-      end
-
-      it 'supports querying' do
-        results = abstract_model.all(query: @players[1].name)
-        expect(results).to eq(@players[1..1])
+      # Multiple columns, table-qualified hashes and rejection of invalid values
+      # are ActiveRecord-only input formats.
+      it 'supports ordering by multiple columns' do
+        expect(abstract_model.all(sort: %w[id name], sort_reverse: true).to_sql.tr('`', '"')).to include('ORDER BY "players"."id" ASC, "players"."name" ASC')
+        expect(abstract_model.all(include: :team, sort: {players: :name, teams: :name}, sort_reverse: true).to_sql.tr('`', '"')).to include('ORDER BY "players"."name" ASC, "teams"."name" ASC')
+        expect { abstract_model.all(sort: 1, sort_reverse: true) }.to raise_error ArgumentError, /Unsupported/
       end
 
       it 'supports multibyte querying' do
         unless activerecord_config[:adapter] == 'sqlite3'
-          results = abstract_model.all(query: @players[4].name)
-          expect(results).to eq(@players[4, 1])
+          results = abstract_model.all(query: players[4].name)
+          expect(results).to eq(players[4, 1])
         end
       end
 
-      it 'supports filtering' do
-        expect(abstract_model.all(filters: {'name' => {'0000' => {o: 'is', v: @players[1].name}}})).to eq(@players[1..1])
+      it 'leaves out a column the queried term could never fit' do
+        player = FactoryBot.create(:player, name: '6121234567')
+        expect(abstract_model.all(query: '6121234567')).to eq [player]
       end
+    end
+
+    # The shared suite asks only that records come out in order; how the batches
+    # are fetched to get there is ActiveRecord's own business.
+    describe '#each_record' do
+      def queries_during(&block)
+        queries = []
+        callback = ->(*, payload) { queries << payload[:sql].tr('`', '"') unless payload[:name] == 'SCHEMA' }
+        ActiveSupport::Notifications.subscribed(callback, 'sql.active_record', &block)
+        queries
+      end
+
+      before { stub_const('RailsAdmin::Adapters::ActiveRecord::Repository::BATCH_SIZE', 2) }
+
+      it 'walks a sort by the primary key in keyset batches, with no offset' do
+        scope = abstract_model.all(sort: abstract_model.primary_key)
+        records = nil
+        queries = queries_during { records = abstract_model.each_record(scope).to_a }
+
+        expect(records).to eq scope.to_a
+        expect(queries.size).to be > 1
+        expect(queries.grep(/OFFSET/)).to be_empty
+      end
+
+      # Rows that sort equal are otherwise free to come back in a different order
+      # for each batch, and an export stitched together from those batches can
+      # repeat one row and miss another.
+      it 'breaks ties by the primary key when sorting by anything else' do
+        Player.update_all(name: 'same')
+        scope = abstract_model.all(sort: RailsAdmin::Criteria::Path[:name])
+        records = nil
+        queries = queries_during { records = abstract_model.each_record(scope).to_a }
+
+        expect(records.collect(&:id)).to match_array players.collect(&:id)
+        expect(queries.first).to match(/ORDER BY "players"\."name" desc, "players"\."id"/)
+        expect(queries.grep(/OFFSET/)).not_to be_empty
+      end
+
+      it 'keeps a limit the scope already has' do
+        scope = abstract_model.all(sort: RailsAdmin::Criteria::Path[:name], limit: 3)
+
+        expect(abstract_model.each_record(scope).to_a).to eq scope.to_a
+      end
+
+      it 'follows a sort by a composite primary key, either way', composite_primary_keys: true do
+        5.times { FactoryBot.create :fanship }
+        fanships = RailsAdmin::AbstractModel.new('Fanship')
+
+        [false, true].each do |sort_reverse|
+          scope = fanships.all(sort: fanships.primary_key, sort_reverse: sort_reverse)
+          expect(fanships.each_record(scope).to_a).to eq scope.to_a
+        end
+      end
+
+      it 'walks a scope with no order the way find_each does' do
+        expect(abstract_model.each_record(Player.all).to_a).to match_array players
+      end
+    end
+  end
+
+  describe '#sort_expression' do
+    let(:abstract_model) { RailsAdmin::AbstractModel.new('Player') }
+
+    it 'quotes the table and column names of a local attribute' do
+      expect(abstract_model.sort_expression(RailsAdmin::Criteria::Path[:name])).
+        to match(/^["`]players["`]\.["`]name["`]$/)
+    end
+
+    it 'quotes the table and column names of an associated attribute' do
+      expect(abstract_model.sort_expression(RailsAdmin::Criteria::Path[:team, :name])).
+        to match(/^["`]teams["`]\.["`]name["`]$/)
+    end
+
+    it 'uses the quoting style of the connection' do
+      adapter =
+        if ::ActiveRecord::Base.respond_to?(:connection_db_config)
+          ::ActiveRecord::Base.connection_db_config.configuration_hash[:adapter]
+        else
+          ::ActiveRecord::Base.connection_config[:adapter]
+        end
+      expected = adapter == 'mysql2' ? '`teams`.`name`' : '"teams"."name"'
+      expect(abstract_model.sort_expression(RailsAdmin::Criteria::Path[:team, :name])).to eq expected
+    end
+
+    it 'hands table-qualified strings through untouched' do
+      expect(abstract_model.sort_expression('teams.name')).to eq 'teams.name'
+    end
+
+    it 'rejects a path through an unknown association' do
+      expect { abstract_model.sort_expression(RailsAdmin::Criteria::Path[:nonexistent, :name]) }.
+        to raise_error ArgumentError, /Unknown association/
+    end
+  end
+
+  describe '#search_column' do
+    let(:abstract_model) { RailsAdmin::AbstractModel.new('Team') }
+
+    # Search statements are assembled unquoted, unlike sort expressions.
+    it 'qualifies a local attribute with its own table' do
+      expect(abstract_model.search_column(RailsAdmin::Criteria::Path[:name])).to eq 'teams.name'
+    end
+
+    it 'qualifies an associated attribute with the associated table' do
+      expect(abstract_model.search_column(RailsAdmin::Criteria::Path[:division, :name])).to eq 'divisions.name'
+    end
+
+    it 'hands table-qualified strings through untouched' do
+      expect(abstract_model.search_column('leagues.name')).to eq 'leagues.name'
     end
   end
 
   describe '#query_scope' do
     let(:abstract_model) { RailsAdmin::AbstractModel.new('Team') }
-
-    before do
-      @teams = [{}, {name: 'somewhere foos'}, {manager: 'foo junior'}].
-               collect { |h| FactoryBot.create :team, h }
+    let!(:teams) do
+      [{}, {name: 'somewhere foos'}, {manager: 'foo junior'}].
+        collect { |h| FactoryBot.create :team, h }
     end
 
     it 'makes correct query' do
-      expect(abstract_model.all(query: 'foo')).to match_array @teams[1..2]
+      expect(abstract_model.all(query: 'foo')).to match_array teams[1..2]
     end
 
     context "when field's searchable_columns is empty" do
@@ -181,7 +291,7 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       end
 
       it 'parses value only once' do
-        expect(abstract_model.all(query: 'foo')).to match_array @teams[1]
+        expect(abstract_model.all(query: 'foo')).to match_array teams[1]
       end
     end
   end
@@ -189,10 +299,10 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
   describe '#filter_scope' do
     let(:abstract_model) { RailsAdmin::AbstractModel.new('Team') }
 
-    before do
-      @division = FactoryBot.create :division, name: 'bar division'
-      @teams = [{}, {division: @division}, {name: 'somewhere foos', division: @division}, {name: 'nowhere foos'}].
-               collect { |h| FactoryBot.create :team, h }
+    let!(:division) { FactoryBot.create :division, name: 'bar division' }
+    let!(:teams) do
+      [{}, {division: division}, {name: 'somewhere foos', division: division}, {name: 'nowhere foos'}].
+        collect { |h| FactoryBot.create :team, h }
     end
 
     context 'without configuration' do
@@ -210,7 +320,7 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
     end
 
     it 'makes correct query' do
-      expect(abstract_model.all(filters: {'name' => {'0000' => {o: 'like', v: 'foo'}}, 'division' => {'0001' => {o: 'like', v: 'bar'}}}, include: :division)).to eq([@teams[2]])
+      expect(abstract_model.all(filters: {'name' => {'0000' => {o: 'like', v: 'foo'}}, 'division' => {'0001' => {o: 'like', v: 'bar'}}}, include: :division)).to eq([teams[2]])
     end
 
     context 'when parsing is not idempotent' do
@@ -227,7 +337,7 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       end
 
       it 'parses value only once' do
-        expect(abstract_model.all(filters: {'name' => {'0000' => {o: 'like', v: 'where'}}})).to match_array @teams[2]
+        expect(abstract_model.all(filters: {'name' => {'0000' => {o: 'like', v: 'where'}}})).to match_array teams[2]
       end
     end
 
@@ -240,13 +350,13 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
 
       it 'only matches on prefix' do
         # Specified operator is honored and matches
-        expect(abstract_model.all(filters: {'name' => {'0000' => {o: 'like', v: 'where'}}})).to match_array @teams[2..3]
+        expect(abstract_model.all(filters: {'name' => {'0000' => {o: 'like', v: 'where'}}})).to match_array teams[2..3]
 
         # No operator falls back to the default_search_operator(starts_with) and doesn't match NON-PREFIX
         expect(abstract_model.all(filters: {'name' => {'0000' => {v: 'where'}}})).to be_empty
 
         # No operator falls back to the default_search_operator(starts_with) and doesn't match NON-PREFIX
-        expect(abstract_model.all(filters: {'name' => {'0000' => {v: 'somewhere'}}})).to match_array @teams[2]
+        expect(abstract_model.all(filters: {'name' => {'0000' => {v: 'somewhere'}}})).to match_array teams[2]
       end
     end
   end
@@ -255,7 +365,7 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
     let(:abstract_model) { RailsAdmin::AbstractModel.new('FieldTest') }
 
     def build_statement(type, value, operator)
-      abstract_model.send(:build_statement, :field, type, value, operator)
+      abstract_model.repository.send(:build_statement, :field, type, value, operator)
     end
 
     it "ignores '_discard' operator or value" do
@@ -264,19 +374,25 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       end
     end
 
+    it "strips '_discard' from array values" do
+      expect(build_statement(:enum, ['_discard'], nil)).to be_nil
+      expect(build_statement(:enum, %w[_discard foo bar], nil)).to eq(['(field IN (?))', %w[foo bar]])
+    end
+
     describe 'string type queries' do
       it 'supports string type query' do
         expect(build_statement(:string, '', nil)).to be_nil
         expect(build_statement(:string, 'foo', 'was')).to be_nil
         expect(build_statement(:string, 'foo', 'default')).to eq([like, '%foo%'])
         expect(build_statement(:string, 'foo', 'like')).to eq([like, '%foo%'])
+        expect(build_statement(:string, 'foo', 'not_like')).to eq([not_like, '%foo%'])
         expect(build_statement(:string, 'foo', 'starts_with')).to eq([like, 'foo%'])
         expect(build_statement(:string, 'foo', 'ends_with')).to eq([like, '%foo'])
         expect(build_statement(:string, 'foo', 'is')).to eq(['(field = ?)', 'foo'])
       end
 
       it 'performs case-insensitive searches' do
-        unless ['postgresql', 'postgis'].include?(activerecord_config[:adapter])
+        unless %w[postgresql postgis].include?(activerecord_config[:adapter])
           expect(build_statement(:string, 'foo', 'default')).to eq([like, '%foo%'])
           expect(build_statement(:string, 'FOO', 'default')).to eq([like, '%foo%'])
         end
@@ -287,6 +403,12 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
         expect(build_statement(:string, 'foo', 'default')).to eq(['(field ILIKE ?)', '%foo%'])
         allow(FieldTest.connection).to receive(:adapter_name).and_return('sqlite3')
         expect(build_statement(:string, 'foo', 'default')).to eq(['(LOWER(field) LIKE ?)', '%foo%'])
+      end
+
+      # Where the comparison is LOWER(), the term is lowered in Ruby to match.
+      it 'lowers a multibyte term' do
+        allow(FieldTest.connection).to receive(:adapter_name).and_return('sqlite3')
+        expect(build_statement(:string, 'ÄÖÜ', 'default')).to eq(['(LOWER(field) LIKE ?)', '%äöü%'])
       end
 
       it "supports '_blank' operator" do
@@ -328,10 +450,10 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
 
     describe 'boolean type queries' do
       it 'supports boolean type query' do
-        %w(false f 0).each do |value|
+        %w[false f 0].each do |value|
           expect(build_statement(:boolean, value, nil)).to eq(['(field IS NULL OR field = ?)', false])
         end
-        %w(true t 1).each do |value|
+        %w[true t 1].each do |value|
           expect(build_statement(:boolean, value, nil)).to eq(['(field = ?)', true])
         end
         expect(build_statement(:boolean, 'word', nil)).to be_nil
@@ -339,13 +461,13 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
 
       it "supports '_blank' operator" do
         [['_blank', ''], ['', '_blank']].each do |value, operator|
-          expect(build_statement(:boolean, value, operator)).to eq(["(field IS NULL)"])
+          expect(build_statement(:boolean, value, operator)).to eq(['(field IS NULL)'])
         end
       end
 
       it "supports '_present' operator" do
         [['_present', ''], ['', '_present']].each do |value, operator|
-          expect(build_statement(:boolean, value, operator)).to eq(["(field IS NOT NULL)"])
+          expect(build_statement(:boolean, value, operator)).to eq(['(field IS NOT NULL)'])
         end
       end
 
@@ -363,13 +485,13 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
 
       it "supports '_empty' operator" do
         [['_empty', ''], ['', '_empty']].each do |value, operator|
-          expect(build_statement(:boolean, value, operator)).to eq(["(field IS NULL)"])
+          expect(build_statement(:boolean, value, operator)).to eq(['(field IS NULL)'])
         end
       end
 
       it "supports '_not_empty' operator" do
         [['_not_empty', ''], ['', '_not_empty']].each do |value, operator|
-          expect(build_statement(:boolean, value, operator)).to eq(["(field IS NOT NULL)"])
+          expect(build_statement(:boolean, value, operator)).to eq(['(field IS NOT NULL)'])
         end
       end
     end
@@ -385,7 +507,7 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
         expect(build_statement(:integer, ['6', '', ''], 'default')).to eq(['(field = ?)', 6])
         expect(build_statement(:integer, ['7', '10', ''], 'default')).to eq(['(field = ?)', 7])
         expect(build_statement(:integer, ['8', '', '20'], 'default')).to eq(['(field = ?)', 8])
-        expect(build_statement(:integer, %w(9 10 20), 'default')).to eq(['(field = ?)', 9])
+        expect(build_statement(:integer, %w[9 10 20], 'default')).to eq(['(field = ?)', 9])
       end
 
       it 'supports integer type range query' do
@@ -394,7 +516,7 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
         expect(build_statement(:integer, ['', '3', ''], 'between')).to eq(['(field >= ?)', 3])
         expect(build_statement(:integer, ['', '', '5'], 'between')).to eq(['(field <= ?)', 5])
         expect(build_statement(:integer, ['', '10', '20'], 'between')).to eq(['(field BETWEEN ? AND ?)', 10, 20])
-        expect(build_statement(:integer, %w(15 10 20), 'between')).to eq(['(field BETWEEN ? AND ?)', 10, 20])
+        expect(build_statement(:integer, %w[15 10 20], 'between')).to eq(['(field BETWEEN ? AND ?)', 10, 20])
         expect(build_statement(:integer, ['', 'word1', ''], 'between')).to be_nil
         expect(build_statement(:integer, ['', '', 'word2'], 'between')).to be_nil
         expect(build_statement(:integer, ['', 'word3', 'word4'], 'between')).to be_nil
@@ -445,9 +567,9 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       it "supports '_blank' operator" do
         [['_blank', ''], ['', '_blank']].each do |value, operator|
           aggregate_failures do
-            expect(build_statement(:integer, value, operator)).to eq(["(field IS NULL)"])
-            expect(build_statement(:decimal, value, operator)).to eq(["(field IS NULL)"])
-            expect(build_statement(:float, value, operator)).to eq(["(field IS NULL)"])
+            expect(build_statement(:integer, value, operator)).to eq(['(field IS NULL)'])
+            expect(build_statement(:decimal, value, operator)).to eq(['(field IS NULL)'])
+            expect(build_statement(:float, value, operator)).to eq(['(field IS NULL)'])
           end
         end
       end
@@ -455,9 +577,9 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       it "supports '_present' operator" do
         [['_present', ''], ['', '_present']].each do |value, operator|
           aggregate_failures do
-            expect(build_statement(:integer, value, operator)).to eq(["(field IS NOT NULL)"])
-            expect(build_statement(:decimal, value, operator)).to eq(["(field IS NOT NULL)"])
-            expect(build_statement(:float, value, operator)).to eq(["(field IS NOT NULL)"])
+            expect(build_statement(:integer, value, operator)).to eq(['(field IS NOT NULL)'])
+            expect(build_statement(:decimal, value, operator)).to eq(['(field IS NOT NULL)'])
+            expect(build_statement(:float, value, operator)).to eq(['(field IS NOT NULL)'])
           end
         end
       end
@@ -465,9 +587,9 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       it "supports '_null' operator" do
         [['_null', ''], ['', '_null']].each do |value, operator|
           aggregate_failures do
-            expect(build_statement(:integer, value, operator)).to eq(["(field IS NULL)"])
-            expect(build_statement(:decimal, value, operator)).to eq(["(field IS NULL)"])
-            expect(build_statement(:float, value, operator)).to eq(["(field IS NULL)"])
+            expect(build_statement(:integer, value, operator)).to eq(['(field IS NULL)'])
+            expect(build_statement(:decimal, value, operator)).to eq(['(field IS NULL)'])
+            expect(build_statement(:float, value, operator)).to eq(['(field IS NULL)'])
           end
         end
       end
@@ -475,9 +597,9 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       it "supports '_not_null' operator" do
         [['_not_null', ''], ['', '_not_null']].each do |value, operator|
           aggregate_failures do
-            expect(build_statement(:integer, value, operator)).to eq(["(field IS NOT NULL)"])
-            expect(build_statement(:decimal, value, operator)).to eq(["(field IS NOT NULL)"])
-            expect(build_statement(:float, value, operator)).to eq(["(field IS NOT NULL)"])
+            expect(build_statement(:integer, value, operator)).to eq(['(field IS NOT NULL)'])
+            expect(build_statement(:decimal, value, operator)).to eq(['(field IS NOT NULL)'])
+            expect(build_statement(:float, value, operator)).to eq(['(field IS NOT NULL)'])
           end
         end
       end
@@ -485,9 +607,9 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       it "supports '_empty' operator" do
         [['_empty', ''], ['', '_empty']].each do |value, operator|
           aggregate_failures do
-            expect(build_statement(:integer, value, operator)).to eq(["(field IS NULL)"])
-            expect(build_statement(:decimal, value, operator)).to eq(["(field IS NULL)"])
-            expect(build_statement(:float, value, operator)).to eq(["(field IS NULL)"])
+            expect(build_statement(:integer, value, operator)).to eq(['(field IS NULL)'])
+            expect(build_statement(:decimal, value, operator)).to eq(['(field IS NULL)'])
+            expect(build_statement(:float, value, operator)).to eq(['(field IS NULL)'])
           end
         end
       end
@@ -495,29 +617,45 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       it "supports '_not_empty' operator" do
         [['_not_empty', ''], ['', '_not_empty']].each do |value, operator|
           aggregate_failures do
-            expect(build_statement(:integer, value, operator)).to eq(["(field IS NOT NULL)"])
-            expect(build_statement(:decimal, value, operator)).to eq(["(field IS NOT NULL)"])
-            expect(build_statement(:float, value, operator)).to eq(["(field IS NOT NULL)"])
+            expect(build_statement(:integer, value, operator)).to eq(['(field IS NOT NULL)'])
+            expect(build_statement(:decimal, value, operator)).to eq(['(field IS NOT NULL)'])
+            expect(build_statement(:float, value, operator)).to eq(['(field IS NOT NULL)'])
           end
         end
       end
     end
 
-    describe 'date type queries' do
+    describe 'date/time type queries' do
       let(:scope) { FieldTest.all }
 
       it 'supports date type query' do
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['', 'February 01, 2012', 'March 01, 2012'], o: 'between'}}))).to eq(["(field_tests.date_field BETWEEN '2012-02-01' AND '2012-03-01')"])
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['', 'March 01, 2012', ''], o: 'between'}}))).to eq(["(field_tests.date_field >= '2012-03-01')"])
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['', '', 'February 01, 2012'], o: 'between'}}))).to eq(["(field_tests.date_field <= '2012-02-01')"])
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['February 01, 2012'], o: 'default'}}))).to eq(["(field_tests.date_field BETWEEN '2012-02-01' AND '2012-02-01')"])
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['', '2012-02-01', '2012-03-01'], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.date_field BETWEEN ? AND ?)', Date.new(2012, 2, 1), Date.new(2012, 3, 1))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['', '2012-03-01', ''], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.date_field >= ?)', Date.new(2012, 3, 1))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['', '', '2012-02-01'], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.date_field <= ?)', Date.new(2012, 2, 1))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: ['2012-02-01'], o: 'default'}}))).to eq(predicates_for(scope.where('(field_tests.date_field = ?)', Date.new(2012, 2, 1))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: [], o: 'today'}}))).to eq(predicates_for(scope.where('(field_tests.date_field = ?)', Date.current)))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: [], o: 'yesterday'}}))).to eq(predicates_for(scope.where('(field_tests.date_field = ?)', Date.yesterday)))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: [], o: 'this_week'}}))).to eq(predicates_for(scope.where('(field_tests.date_field BETWEEN ? AND ?)', Date.current.beginning_of_week, Date.current.end_of_week)))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'date_field' => {'1' => {v: [], o: 'last_week'}}))).to eq(predicates_for(scope.where('(field_tests.date_field BETWEEN ? AND ?)', 1.week.ago.to_date.beginning_of_week, 1.week.ago.to_date.end_of_week)))
       end
 
       it 'supports datetime type query' do
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['', 'February 01, 2012 12:00', 'March 01, 2012 12:00'], o: 'between'}}))).to eq(predicates_for(scope.where(['(field_tests.datetime_field BETWEEN ? AND ?)', Time.utc(2012, 2, 1), Time.utc(2012, 3, 1).end_of_day])))
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['', 'March 01, 2012 12:00', ''], o: 'between'}}))).to eq(predicates_for(scope.where(['(field_tests.datetime_field >= ?)', Time.utc(2012, 3, 1)])))
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['', '', 'February 01, 2012 12:00'], o: 'between'}}))).to eq(predicates_for(scope.where(['(field_tests.datetime_field <= ?)', Time.utc(2012, 2, 1).end_of_day])))
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['February 01, 2012 12:00'], o: 'default'}}))).to eq(predicates_for(scope.where(['(field_tests.datetime_field BETWEEN ? AND ?)', Time.utc(2012, 2, 1), Time.utc(2012, 2, 1).end_of_day])))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['', '2012-02-01T12:00:00', '2012-03-01T12:00:00'], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field BETWEEN ? AND ?)', Time.utc(2012, 2, 1, 12), Time.utc(2012, 3, 1, 12))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['', '2012-03-01T12:00:00', ''], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field >= ?)', Time.utc(2012, 3, 1, 12))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['', '', '2012-02-01T12:00:00'], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field <= ?)', Time.utc(2012, 2, 1, 12))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: ['2012-02-01T12:00:00'], o: 'default'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field = ?)', Time.utc(2012, 2, 1, 12))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: [], o: 'today'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field BETWEEN ? AND ?)', Date.current.beginning_of_day, Date.current.end_of_day)))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: [], o: 'yesterday'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field BETWEEN ? AND ?)', Date.yesterday.beginning_of_day, Date.yesterday.end_of_day)))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: [], o: 'this_week'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field BETWEEN ? AND ?)', Date.current.beginning_of_week.beginning_of_day, Date.current.end_of_week.end_of_day)))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'datetime_field' => {'1' => {v: [], o: 'last_week'}}))).to eq(predicates_for(scope.where('(field_tests.datetime_field BETWEEN ? AND ?)', 1.week.ago.beginning_of_week, 1.week.ago.end_of_week)))
+      end
+
+      it 'supports time type query' do
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'time_field' => {'1' => {v: ['', '2000-01-01T12:00:00', '2000-01-01T14:00:00'], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.time_field BETWEEN ? AND ?)', Time.utc(2000, 1, 1, 12), Time.utc(2000, 1, 1, 14))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'time_field' => {'1' => {v: ['', '2000-01-01T14:00:00', ''], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.time_field >= ?)', Time.utc(2000, 1, 1, 14))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'time_field' => {'1' => {v: ['', '', '2000-01-01T12:00:00'], o: 'between'}}))).to eq(predicates_for(scope.where('(field_tests.time_field <= ?)', Time.utc(2000, 1, 1, 12))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'time_field' => {'1' => {v: ['2000-01-01T12:00:00'], o: 'default'}}))).to eq(predicates_for(scope.where('(field_tests.time_field = ?)', Time.utc(2000, 1, 1, 12))))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'time_field' => {'1' => {v: ['2021-02-03T12:00:00'], o: 'default'}}))).to eq(predicates_for(scope.where('(field_tests.time_field = ?)', Time.utc(2000, 1, 1, 12))))
       end
     end
 
@@ -525,21 +663,68 @@ RSpec.describe 'RailsAdmin::Adapters::ActiveRecord', active_record: true do
       expect(build_statement(:enum, '1', nil)).to eq(['(field IN (?))', ['1']])
     end
 
+    it "supports '_blank' and '_present' operators on an enum without comparing it against ''" do
+      [['_blank', ''], ['', '_blank']].each do |value, operator|
+        expect(build_statement(:enum, value, operator)).to eq(['(field IS NULL)'])
+      end
+      [['_present', ''], ['', '_present']].each do |value, operator|
+        expect(build_statement(:enum, value, operator)).to eq(['(field IS NOT NULL)'])
+      end
+    end
+
     describe 'with ActiveRecord native enum' do
       let(:scope) { FieldTest.all }
 
       it 'supports integer enum type query' do
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'integer_enum_field' => {'1' => {v: 2, o: 'default'}}))).to eq(predicates_for(scope.where(['(field_tests.integer_enum_field IN (?))', 2])))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'integer_enum_field' => {'1' => {v: 2, o: 'default'}}))).to eq(predicates_for(scope.where('(field_tests.integer_enum_field IN (?))', [2])))
       end
 
       it 'supports string enum type query' do
-        expect(predicates_for(abstract_model.send(:filter_scope, scope, 'string_enum_field' => {'1' => {v: 'm', o: 'default'}}))).to eq(predicates_for(scope.where(['(field_tests.string_enum_field IN (?))', 'm'])))
+        expect(predicates_for(abstract_model.repository.send(:filter_scope, scope, 'string_enum_field' => {'1' => {v: 'm', o: 'default'}}))).to eq(predicates_for(scope.where('(field_tests.string_enum_field IN (?))', ['m'])))
       end
     end
 
-    it 'supports uuid type query' do
-      uuid = SecureRandom.uuid
-      expect(build_statement(:uuid, uuid, nil)).to eq(['(field = ?)', uuid])
+    describe 'uuid type queries' do
+      it 'supports uuid type query' do
+        uuid = SecureRandom.uuid
+        expect(build_statement(:uuid, uuid, nil)).to eq(['(field = ?)', uuid])
+      end
+
+      it "supports '_blank' operator" do
+        [['_blank', ''], ['', '_blank']].each do |value, operator|
+          expect(build_statement(:uuid, value, operator)).to eq(['(field IS NULL)'])
+        end
+      end
+
+      it "supports '_present' operator" do
+        [['_present', ''], ['', '_present']].each do |value, operator|
+          expect(build_statement(:uuid, value, operator)).to eq(['(field IS NOT NULL)'])
+        end
+      end
+
+      it "supports '_null' operator" do
+        [['_null', ''], ['', '_null']].each do |value, operator|
+          expect(build_statement(:uuid, value, operator)).to eq(['(field IS NULL)'])
+        end
+      end
+
+      it "supports '_not_null' operator" do
+        [['_not_null', ''], ['', '_not_null']].each do |value, operator|
+          expect(build_statement(:uuid, value, operator)).to eq(['(field IS NOT NULL)'])
+        end
+      end
+
+      it "supports '_empty' operator" do
+        [['_empty', ''], ['', '_empty']].each do |value, operator|
+          expect(build_statement(:uuid, value, operator)).to eq(['(field IS NULL)'])
+        end
+      end
+
+      it "supports '_not_empty' operator" do
+        [['_not_empty', ''], ['', '_not_empty']].each do |value, operator|
+          expect(build_statement(:uuid, value, operator)).to eq(['(field IS NOT NULL)'])
+        end
+      end
     end
   end
 

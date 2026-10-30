@@ -1,0 +1,15 @@
+<meta content="IE=edge" http-equiv="X-UA-Compatible">
+<meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+<meta content="width=device-width, initial-scale=1" name="viewport">
+<meta content="NONE,NOARCHIVE" name="robots">
+<meta content="false" name="turbo-prefetch">
+<%= csrf_meta_tag %>
+<%= csp_meta_tag %>
+<% asset_source = RailsAdmin.config.asset_source %>
+<% if asset_source.respond_to?(:call) %>
+  <%= asset_source.call(self) %>
+<% else %>
+  <%= stylesheet_link_tag "rails_admin", media: :all, data: {'turbo-track': 'reload'}, nonce: true %>
+  <%= javascript_include_tag "rails_admin", defer: true, data: {'turbo-track': 'reload'}, nonce: true %>
+<% end %>
+<%= render "layouts/rails_admin/head_custom" %>

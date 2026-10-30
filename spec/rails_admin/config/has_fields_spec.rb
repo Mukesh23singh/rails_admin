@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'spec_helper'
 
 RSpec.describe RailsAdmin::Config::HasFields do
@@ -24,7 +26,50 @@ RSpec.describe RailsAdmin::Config::HasFields do
       end
     end
     expect { RailsAdmin.config(Team).fields.detect { |f| f.name == :division } }.not_to raise_error
-    expect { RailsAdmin.config(Team).fields.detect { |f| f.name == :division }.visible? }.to raise_error("undefined method `[]' for nil:NilClass")
+    expect { RailsAdmin.config(Team).fields.detect { |f| f.name == :division }.visible? }.to raise_error(/undefined method [`']\[\]' for nil/)
+  end
+
+  it 'keeps a visible block when the field is declared again' do
+    RailsAdmin.config do |config|
+      config.model Team do
+        list do
+          field :name do
+            visible { false }
+          end
+          field :name
+        end
+      end
+    end
+    expect(RailsAdmin.config(Team).list.fields.detect { |f| f.name == :name }).not_to be_visible
+  end
+
+  context 'with a field whose name is no instance variable name' do
+    before do
+      if CI_ORM == :mongoid
+        Team.instance_eval { field :admin?, type: Mongoid::Boolean }
+      else
+        ActiveRecord::Base.connection.add_column :teams, 'admin?', :boolean
+        Team.reset_column_information
+      end
+    end
+
+    after do
+      if CI_ORM == :mongoid
+        Team.fields.delete('admin?')
+      else
+        ActiveRecord::Base.connection.remove_column :teams, 'admin?'
+        Team.reset_column_information
+      end
+    end
+
+    it 'can be configured' do
+      RailsAdmin.config do |config|
+        config.model Team do
+          field :admin?
+        end
+      end
+      expect(RailsAdmin.config(Team).fields.map(&:name)).to include :admin?
+    end
   end
 
   it 'assigns properties to new one on overriding existing field' do
@@ -36,19 +81,59 @@ RSpec.describe RailsAdmin::Config::HasFields do
     expect(RailsAdmin.config(Team).fields.detect { |f| f.name == :players }.properties).not_to be_nil
   end
 
-  it 'does not change the order of existing fields, if some field types of them are changed' do
-    original_fields_order = RailsAdmin.config(Team).fields.map(&:name)
+  describe '#configure' do
+    it 'does not change the order of existing fields, if some field types of them are changed' do
+      original_fields_order = RailsAdmin.config(Team).fields.map(&:name)
 
-    RailsAdmin.config do |config|
-      config.model Team do
-        configure :players, :enum do
-          enum { [] }
+      RailsAdmin.config do |config|
+        config.model Team do
+          configure :players, :enum do
+            enum { [] }
+          end
+
+          configure :revenue, :integer
         end
+      end
 
-        configure :revenue, :integer
+      expect(RailsAdmin.config(Team).fields.map(&:name)).to eql(original_fields_order)
+    end
+
+    it 'allows passing multiple fields to share the same configuration' do
+      target_field_names = %i[players revenue]
+
+      original_config = RailsAdmin.config(Team).fields.select { |field| target_field_names.include?(field.name) }
+      original_config.each { |field| expect(field).to be_visible }
+
+      RailsAdmin.config do |config|
+        config.model Team do
+          configure target_field_names do
+            visible false
+          end
+        end
+      end
+
+      updated_config = RailsAdmin.config(Team).fields.select { |field| target_field_names.include?(field.name) }
+      updated_config.each { |field| expect(field).to_not be_visible }
+    end
+  end
+
+  describe '#_fields' do
+    let(:config) { RailsAdmin.config(Team) }
+    before do
+      RailsAdmin.config(Team) do
+        field :id
+        field :wins, :boolean
       end
     end
 
-    expect(RailsAdmin.config(Team).fields.map(&:name)).to eql(original_fields_order)
+    it "does not cause FrozenError by changing exiting field's type" do
+      # Reference the fields for readonly
+      config.edit.send(:_fields, true)
+
+      RailsAdmin.config(Team) do
+        field :wins, :integer
+      end
+      expect(config.fields.map(&:name)).to match_array %i[id wins]
+    end
   end
 end

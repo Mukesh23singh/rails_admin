@@ -1,0 +1,31 @@
+/*
+  The jQuery UI autocomplete menu. filtering-select.js renders it with Bootstrap's
+  .dropdown-menu / .dropdown-item classes, so only what Bootstrap does not cover
+  belongs here.
+*/
+.ui-autocomplete {
+  cursor: default;
+
+  /* A touch larger than the surrounding form, as the pre-Bootstrap menu was. */
+  --bs-dropdown-font-size: var(--ra-autocomplete-font-size);
+
+  /* Above .modal (1055), so the menu is usable in the nested-form modal. */
+  z-index: 1056 !important;
+
+  /* Bootstrap only emits this with $enable-shadows; the menu floats over the form. */
+  box-shadow: var(--bs-dropdown-box-shadow);
+
+  /*
+    jQuery UI marks the focused item - by keyboard or by pointer - as
+    .ui-state-active rather than leaving it to :hover, so it takes the styling
+    Bootstrap gives .dropdown-item.active.
+  */
+  .dropdown-item.ui-state-active {
+    color: var(--bs-dropdown-link-active-color);
+    background-color: var(--bs-dropdown-link-active-bg);
+  }
+}
+
+.ui-helper-hidden-accessible {
+  display: none;
+}

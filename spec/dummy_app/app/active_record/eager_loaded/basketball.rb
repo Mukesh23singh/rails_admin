@@ -1,2 +1,0 @@
-class Basketball < Ball
-end
